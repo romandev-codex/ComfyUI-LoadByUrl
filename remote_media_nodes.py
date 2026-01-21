@@ -51,7 +51,8 @@ class LoadVideoByUrl:
         return {
             "required": {
                 "url": ("STRING", {"default": "https://example.com/video.mp4", "multiline": False}),
-                "max_frames": ("INT", {"default": 32, "min": 0, "max": 500, "step": 1}),
+                "max_frames": ("INT", {"default": 32, "min": 0, "max": 10000, "step": 1}),
+                "frame_skip": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
                 "force_width": ("INT", {"default": 100, "min": 0, "max": 1000, "step": 1}),
                 "force_height": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
             },
@@ -62,7 +63,7 @@ class LoadVideoByUrl:
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
 
-    def load_video(self, url, max_frames, force_width, force_height):
+    def load_video(self, url, max_frames, frame_skip, force_width, force_height):
         response = requests.get(url, stream=True)
         response.raise_for_status()
         buffer = BytesIO(response.content)
@@ -72,9 +73,13 @@ class LoadVideoByUrl:
         fps = float(video_stream.average_rate or 25)
         frames = []
 
+        frame_count = 0
         for i, frame in enumerate(container.decode(video_stream)):
-            if max_frames > 0 and i >= max_frames:
+            if frame_skip > 0 and i % (frame_skip + 1) != 0:
+                continue
+            if max_frames > 0 and frame_count >= max_frames:
                 break
+            frame_count += 1
             img = frame.to_ndarray(format="rgb24")
 
             # Resize if force_width or force_height is specified
@@ -116,7 +121,7 @@ class LoadVideoByUrl:
         return video_tensor, fps
 
     @classmethod
-    def IS_CHANGED(cls, url, max_frames, force_width, force_height):
+    def IS_CHANGED(cls, url, max_frames, frame_skip, force_width, force_height):
         return url
 
 
