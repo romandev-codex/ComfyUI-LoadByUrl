@@ -63,6 +63,30 @@ class LoadVideoByUrl:
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
 
+    def _resize_frame(self, img, force_width, force_height):
+        """Helper method to resize a frame based on force_width and force_height"""
+        if force_width <= 0 and force_height <= 0:
+            return img
+            
+        from PIL import Image
+        pil_img = Image.fromarray(img)
+        
+        if force_width > 0 and force_height > 0:
+            new_width, new_height = force_width, force_height
+        elif force_width > 0:
+            aspect_ratio = pil_img.height / pil_img.width
+            new_width = force_width
+            new_height = int(force_width * aspect_ratio)
+        else:
+            aspect_ratio = pil_img.width / pil_img.height
+            new_height = force_height
+            new_width = int(force_height * aspect_ratio)
+        
+        pil_img = pil_img.resize((new_width, new_height), Image.LANCZOS)
+        resized = np.array(pil_img)
+        del pil_img
+        return resized
+
     def load_video(self, url, max_frames, frame_skip, force_width, force_height):
         response = requests.get(url, stream=True)
         response.raise_for_status()
@@ -72,47 +96,45 @@ class LoadVideoByUrl:
         video_stream = next(s for s in container.streams if s.type == "video")
         fps = float(video_stream.average_rate or 25)
         frames = []
+        last_frame_data = None
 
         frame_count = 0
         for i, frame in enumerate(container.decode(video_stream)):
-            if frame_skip > 0 and i % (frame_skip + 1) != 0:
+            is_first = i == 0
+            should_include = is_first or (frame_skip == 0) or (i % (frame_skip + 1) == 0)
+            
+            img = frame.to_ndarray(format="rgb24")
+            
+            # Store as last_frame_data (will be added at end if not already included)
+            last_frame_data = (img, i)
+            
+            # Skip middle frames based on frame_skip logic
+            if not should_include:
                 continue
+                
             if max_frames > 0 and frame_count >= max_frames:
                 break
             frame_count += 1
-            img = frame.to_ndarray(format="rgb24")
 
-            # Resize if force_width or force_height is specified
-            if force_width > 0 or force_height > 0:
-                from PIL import Image
-                pil_img = Image.fromarray(img)
-                
-                if force_width > 0 and force_height > 0:
-                    # Both dimensions specified
-                    new_width, new_height = force_width, force_height
-                elif force_width > 0:
-                    # Only width specified, maintain aspect ratio
-                    aspect_ratio = pil_img.height / pil_img.width
-                    new_width = force_width
-                    new_height = int(force_width * aspect_ratio)
-                else:
-                    # Only height specified, maintain aspect ratio
-                    aspect_ratio = pil_img.width / pil_img.height
-                    new_height = force_height
-                    new_width = int(force_height * aspect_ratio)
-                
-                pil_img = pil_img.resize((new_width, new_height), Image.LANCZOS)
-                img = np.array(pil_img)
-                del pil_img  # Clean up PIL image
-
+            img = self._resize_frame(img, force_width, force_height)
             tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
             frames.append(tensor)
 
-            # Clean up temporary variables
             del img
             del tensor
 
         container.close()
+        
+        # Add last frame if it wasn't already included
+        if last_frame_data and len(frames) > 0:
+            last_img, last_idx = last_frame_data
+            last_processed_idx = last_idx if should_include else -1
+            if frame_skip > 0 and last_processed_idx != last_idx:
+                img = self._resize_frame(last_img, force_width, force_height)
+                tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
+                frames.append(tensor)
+                del img
+                del tensor
 
         if not frames:
             raise ValueError("No frames decoded from video.")
