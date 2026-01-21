@@ -53,6 +53,7 @@ class LoadVideoByUrl:
                 "url": ("STRING", {"default": "https://example.com/video.mp4", "multiline": False}),
                 "max_frames": ("INT", {"default": 32, "min": 0, "max": 500, "step": 1}),
                 "force_width": ("INT", {"default": 100, "min": 0, "max": 1000, "step": 1}),
+                "force_height": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
             },
         }
 
@@ -61,7 +62,7 @@ class LoadVideoByUrl:
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
 
-    def load_video(self, url, max_frames, force_width):
+    def load_video(self, url, max_frames, force_width, force_height):
         response = requests.get(url, stream=True)
         response.raise_for_status()
         buffer = BytesIO(response.content)
@@ -76,13 +77,26 @@ class LoadVideoByUrl:
                 break
             img = frame.to_ndarray(format="rgb24")
 
-            # Resize if force_width is specified
-            if force_width > 0:
+            # Resize if force_width or force_height is specified
+            if force_width > 0 or force_height > 0:
                 from PIL import Image
                 pil_img = Image.fromarray(img)
-                aspect_ratio = pil_img. height / pil_img.width
-                new_height = int(force_width * aspect_ratio)
-                pil_img = pil_img.resize((force_width, new_height), Image.LANCZOS)
+                
+                if force_width > 0 and force_height > 0:
+                    # Both dimensions specified
+                    new_width, new_height = force_width, force_height
+                elif force_width > 0:
+                    # Only width specified, maintain aspect ratio
+                    aspect_ratio = pil_img.height / pil_img.width
+                    new_width = force_width
+                    new_height = int(force_width * aspect_ratio)
+                else:
+                    # Only height specified, maintain aspect ratio
+                    aspect_ratio = pil_img.width / pil_img.height
+                    new_height = force_height
+                    new_width = int(force_height * aspect_ratio)
+                
+                pil_img = pil_img.resize((new_width, new_height), Image.LANCZOS)
                 img = np.array(pil_img)
                 del pil_img  # Clean up PIL image
 
@@ -102,7 +116,7 @@ class LoadVideoByUrl:
         return video_tensor, fps
 
     @classmethod
-    def IS_CHANGED(cls, url, max_frames, force_width):
+    def IS_CHANGED(cls, url, max_frames, force_width, force_height):
         return url
 
 
