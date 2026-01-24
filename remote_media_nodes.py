@@ -58,8 +58,8 @@ class LoadVideoByUrl:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "FLOAT",)
-    RETURN_NAMES = ("IMAGES", "FPS",)
+    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE",)
+    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME",)
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
 
@@ -140,7 +140,9 @@ class LoadVideoByUrl:
             raise ValueError("No frames decoded from video.")
 
         video_tensor = torch.cat(frames, dim=0)  # (frames, H, W, 3)
-        return video_tensor, fps
+        first_frame = frames[0]
+        last_frame = frames[-1]
+        return video_tensor, fps, first_frame, last_frame
 
     @classmethod
     def IS_CHANGED(cls, url, max_frames, frame_skip, force_width, force_height):
