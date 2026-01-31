@@ -149,13 +149,114 @@ class LoadVideoByUrl:
         return url
 
 
+# 🌐 LoadByUrl (Auto-detect Image or Video)
+class LoadByUrl:
+    """
+    Automatically detects if the URL is an image or video and loads it accordingly.
+    Returns unified output format: IMAGES, FPS, FIRST_FRAME, LAST_FRAME
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "https://example.com/media.png", "multiline": False}),
+                "max_frames": ("INT", {"default": 32, "min": 0, "max": 10000, "step": 1}),
+                "frame_skip": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
+                "force_width": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
+                "force_height": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
+                "url1": ("STRING", {"default": "", "multiline": False}),
+                "url2": ("STRING", {"default": "", "multiline": False}),
+                "url3": ("STRING", {"default": "", "multiline": False}),
+                "url4": ("STRING", {"default": "", "multiline": False}),
+                "url5": ("STRING", {"default": "", "multiline": False}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE",)
+    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME", "image1", "image2", "image3", "image4", "image5",)
+    FUNCTION = "load_media"
+    CATEGORY = "Remhes/Remote"
+
+    def _is_video_url(self, url, content_type):
+        """Detect if URL points to a video based on extension and content-type"""
+        video_extensions = ('.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv', '.m4v', '.mpg', '.mpeg')
+        image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.tif')
+        
+        url_lower = url.lower()
+        
+        # Check content-type header first
+        if content_type:
+            if content_type.startswith('video/'):
+                return True
+            if content_type.startswith('image/'):
+                return False
+        
+        # Check file extension
+        if any(url_lower.endswith(ext) for ext in video_extensions):
+            return True
+        if any(url_lower.endswith(ext) for ext in image_extensions):
+            return False
+        
+        # Default to image if uncertain
+        return False
+
+    def load_media(self, url, max_frames, frame_skip, force_width, force_height, url1, url2, url3, url4, url5):
+        # Fetch headers to detect media type
+        response = requests.head(url, allow_redirects=True)
+        content_type = response.headers.get('content-type', '').lower()
+        
+        is_video = self._is_video_url(url, content_type)
+        
+        if is_video:
+            # Use LoadVideoByUrl logic
+            video_loader = LoadVideoByUrl()
+            video_tensor, fps, first_frame, last_frame = video_loader.load_video(url, max_frames, frame_skip, force_width, force_height)
+        else:
+            # Load as image and format as video output
+            image_loader = LoadImageByUrl()
+            image_tensor = image_loader.load_image(url)[0]
+            
+            # For images: FPS = 0, and first/last frame are the same
+            fps = 0.0
+            first_frame = image_tensor
+            last_frame = image_tensor
+            video_tensor = image_tensor
+        
+        # Load additional images (url1-url5) - works only for images
+        image_loader = LoadImageByUrl()
+        additional_images = []
+        
+        for img_url in [url1, url2, url3, url4, url5]:
+            if img_url and img_url.strip():
+                try:
+                    img_tensor = image_loader.load_image(img_url)[0]
+                    additional_images.append(img_tensor)
+                except Exception as e:
+                    # If loading fails, create a blank 1x1 black image
+                    blank = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+                    additional_images.append(blank)
+            else:
+                # Empty URL - create blank 1x1 black image
+                blank = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
+                additional_images.append(blank)
+        
+        return (video_tensor, fps, first_frame, last_frame, *additional_images)
+
+    @classmethod
+    def IS_CHANGED(cls, url, max_frames, frame_skip, force_width, force_height, url1, url2, url3, url4, url5):
+        return f"{url}|{url1}|{url2}|{url3}|{url4}|{url5}"
+
+
 # --- Register both nodes with ComfyUI ---
 NODE_CLASS_MAPPINGS = {
     "LoadImageByUrl": LoadImageByUrl,
     "LoadVideoByUrl": LoadVideoByUrl,
+    "LoadByUrl": LoadByUrl,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImageByUrl": "🖼️ Load Image by URL",
     "LoadVideoByUrl": "🎥 Load Video by URL",
+    "LoadByUrl": "🌐 Load by URL (Auto-detect)",
 }
