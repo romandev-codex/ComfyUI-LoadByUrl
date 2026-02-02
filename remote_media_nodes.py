@@ -17,6 +17,8 @@ class LoadImageByUrl:
         return {
             "required": {
                 "url": ("STRING", {"default": "https://example.com/image.png", "multiline": False}),
+                "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
             },
         }
 
@@ -24,19 +26,42 @@ class LoadImageByUrl:
     FUNCTION = "load_image"
     CATEGORY = "Remhes/Remote"
 
-    def load_image(self, url):
+    def load_image(self, url, max_width=0, max_height=0):
         response = requests.get(url, stream=True)
         response.raise_for_status()
 
         image = Image.open(BytesIO(response.content))
         image = ImageOps.exif_transpose(image)
-        arr = np.array(image.convert("RGB"), dtype=np.float32) / 255.0
+        image = image.convert("RGB")
+        
+        # Apply max_width and max_height constraints
+        current_width, current_height = image.size
+        new_width = current_width
+        new_height = current_height
+        
+        # Calculate scaling for width constraint
+        if max_width > 0 and current_width > max_width:
+            width_scale = max_width / current_width
+            new_width = max_width
+            new_height = int(current_height * width_scale)
+        
+        # Calculate scaling for height constraint
+        if max_height > 0 and new_height > max_height:
+            height_scale = max_height / new_height
+            new_height = max_height
+            new_width = int(new_width * height_scale)
+        
+        # Resize if needed
+        if new_width != current_width or new_height != current_height:
+            image = image.resize((new_width, new_height), Image.LANCZOS)
+        
+        arr = np.array(image, dtype=np.float32) / 255.0
         tensor = torch.from_numpy(arr).unsqueeze(0)  # (1, H, W, 3)
 
         return (tensor,)
 
     @classmethod
-    def IS_CHANGED(cls, url):
+    def IS_CHANGED(cls, url, max_width, max_height):
         return url
 
 
@@ -53,8 +78,8 @@ class LoadVideoByUrl:
                 "url": ("STRING", {"default": "https://example.com/video.mp4", "multiline": False}),
                 "max_frames": ("INT", {"default": 32, "min": 0, "max": 10000, "step": 1}),
                 "frame_skip": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
-                "force_width": ("INT", {"default": 100, "min": 0, "max": 1000, "step": 1}),
-                "force_height": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
+                "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
             },
         }
 
@@ -63,31 +88,39 @@ class LoadVideoByUrl:
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
 
-    def _resize_frame(self, img, force_width, force_height):
-        """Helper method to resize a frame based on force_width and force_height"""
-        if force_width <= 0 and force_height <= 0:
-            return img
-            
+    def _resize_frame(self, img, max_width, max_height):
+        """Helper method to resize a frame based on max_width and max_height"""
         from PIL import Image
         pil_img = Image.fromarray(img)
         
-        if force_width > 0 and force_height > 0:
-            new_width, new_height = force_width, force_height
-        elif force_width > 0:
-            aspect_ratio = pil_img.height / pil_img.width
-            new_width = force_width
-            new_height = int(force_width * aspect_ratio)
-        else:
-            aspect_ratio = pil_img.width / pil_img.height
-            new_height = force_height
-            new_width = int(force_height * aspect_ratio)
+        current_width = pil_img.width
+        current_height = pil_img.height
+        
+        new_width = current_width
+        new_height = current_height
+        
+        # Calculate scaling for width constraint
+        if max_width > 0 and current_width > max_width:
+            width_scale = max_width / current_width
+            new_width = max_width
+            new_height = int(current_height * width_scale)
+        
+        # Calculate scaling for height constraint
+        if max_height > 0 and new_height > max_height:
+            height_scale = max_height / new_height
+            new_height = max_height
+            new_width = int(new_width * height_scale)
+        
+        # No resizing needed
+        if new_width == current_width and new_height == current_height:
+            return img
         
         pil_img = pil_img.resize((new_width, new_height), Image.LANCZOS)
         resized = np.array(pil_img)
         del pil_img
         return resized
 
-    def load_video(self, url, max_frames, frame_skip, force_width, force_height):
+    def load_video(self, url, max_frames, frame_skip, max_width, max_height):
         response = requests.get(url, stream=True)
         response.raise_for_status()
         buffer = BytesIO(response.content)
@@ -116,7 +149,7 @@ class LoadVideoByUrl:
                 break
             frame_count += 1
 
-            img = self._resize_frame(img, force_width, force_height)
+            img = self._resize_frame(img, max_width, max_height)
             tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
             frames.append(tensor)
 
@@ -130,7 +163,7 @@ class LoadVideoByUrl:
             last_img, last_idx = last_frame_data
             last_processed_idx = last_idx if should_include else -1
             if frame_skip > 0 and last_processed_idx != last_idx:
-                img = self._resize_frame(last_img, force_width, force_height)
+                img = self._resize_frame(last_img, max_width, max_height)
                 tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
                 frames.append(tensor)
                 del img
@@ -145,7 +178,7 @@ class LoadVideoByUrl:
         return video_tensor, fps, first_frame, last_frame
 
     @classmethod
-    def IS_CHANGED(cls, url, max_frames, frame_skip, force_width, force_height):
+    def IS_CHANGED(cls, url, max_frames, frame_skip, max_width, max_height):
         return url
 
 
@@ -163,8 +196,8 @@ class LoadByUrl:
                 "url": ("STRING", {"default": "https://example.com/media.png", "multiline": False}),
                 "max_frames": ("INT", {"default": 32, "min": 0, "max": 10000, "step": 1}),
                 "frame_skip": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
-                "force_width": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
-                "force_height": ("INT", {"default": 0, "min": 0, "max": 1000, "step": 1}),
+                "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "url1": ("STRING", {"default": "", "multiline": False}),
                 "url2": ("STRING", {"default": "", "multiline": False}),
                 "url3": ("STRING", {"default": "", "multiline": False}),
@@ -201,7 +234,7 @@ class LoadByUrl:
         # Default to image if uncertain
         return False
 
-    def load_media(self, url, max_frames, frame_skip, force_width, force_height, url1, url2, url3, url4, url5):
+    def load_media(self, url, max_frames, frame_skip, max_width, max_height, url1, url2, url3, url4, url5):
         # Fetch headers to detect media type
         response = requests.head(url, allow_redirects=True)
         content_type = response.headers.get('content-type', '').lower()
@@ -211,7 +244,7 @@ class LoadByUrl:
         if is_video:
             # Use LoadVideoByUrl logic
             video_loader = LoadVideoByUrl()
-            video_tensor, fps, first_frame, last_frame = video_loader.load_video(url, max_frames, frame_skip, force_width, force_height)
+            video_tensor, fps, first_frame, last_frame = video_loader.load_video(url, max_frames, frame_skip, max_width, max_height)
         else:
             # Load as image and format as video output
             image_loader = LoadImageByUrl()
@@ -233,18 +266,16 @@ class LoadByUrl:
                     img_tensor = image_loader.load_image(img_url)[0]
                     additional_images.append(img_tensor)
                 except Exception as e:
-                    # If loading fails, create a blank 1x1 black image
-                    blank = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
-                    additional_images.append(blank)
+                    # If loading fails, return None
+                    additional_images.append(None)
             else:
-                # Empty URL - create blank 1x1 black image
-                blank = torch.zeros((1, 1, 1, 3), dtype=torch.float32)
-                additional_images.append(blank)
+                # Empty URL - return None
+                additional_images.append(None)
         
         return (video_tensor, fps, first_frame, last_frame, *additional_images)
 
     @classmethod
-    def IS_CHANGED(cls, url, max_frames, frame_skip, force_width, force_height, url1, url2, url3, url4, url5):
+    def IS_CHANGED(cls, url, max_frames, frame_skip, max_width, max_height, url1, url2, url3, url4, url5):
         return f"{url}|{url1}|{url2}|{url3}|{url4}|{url5}"
 
 
