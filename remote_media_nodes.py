@@ -22,14 +22,15 @@ class LoadImageByUrl:
             },
         }
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "INT", "INT",)
+    RETURN_NAMES = ("IMAGE", "WIDTH", "HEIGHT",)
     FUNCTION = "load_image"
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
 
     def load_image(self, url, max_width=0, max_height=0):
         if not url or not url.strip():
-            return (None,)
+            return (None, None, None)
         
         response = requests.get(url, stream=True)
         response.raise_for_status()
@@ -61,8 +62,9 @@ class LoadImageByUrl:
         
         arr = np.array(image, dtype=np.float32) / 255.0
         tensor = torch.from_numpy(arr).unsqueeze(0)  # (1, H, W, 3)
+        height, width = tensor.shape[1], tensor.shape[2]
 
-        return (tensor,)
+        return (tensor, width, height)
 
     @classmethod
     def IS_CHANGED(cls, url, max_width, max_height):
@@ -89,8 +91,8 @@ class LoadImagesByUrl:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE",)
-    RETURN_NAMES = ("image1", "image2", "image3", "image4", "image5",)
+    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE", "INT", "INT",)
+    RETURN_NAMES = ("image1", "image2", "image3", "image4", "image5", "WIDTH", "HEIGHT",)
     FUNCTION = "load_images"
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
@@ -98,13 +100,19 @@ class LoadImagesByUrl:
     def load_images(self, url, max_width, max_height, url2, url3, url4, url5):
         image_loader = LoadImageByUrl()
         images = []
+        first_width = None
+        first_height = None
         
         # Load all URLs
-        for img_url in [url, url2, url3, url4, url5]:
+        for idx, img_url in enumerate([url, url2, url3, url4, url5]):
             if img_url and img_url.strip():
                 try:
-                    img_tensor = image_loader.load_image(img_url, max_width, max_height)[0]
+                    img_tensor, width, height = image_loader.load_image(img_url, max_width, max_height)
                     images.append(img_tensor)
+                    # Store dimensions only for first image
+                    if idx == 0:
+                        first_width = width
+                        first_height = height
                 except Exception as e:
                     # If loading fails, return None
                     images.append(None)
@@ -112,7 +120,7 @@ class LoadImagesByUrl:
                 # Empty URL - return None
                 images.append(None)
         
-        return tuple(images)
+        return tuple(images + [first_width, first_height])
 
     @classmethod
     def IS_CHANGED(cls, url, max_width, max_height, url2, url3, url4, url5):
@@ -137,8 +145,8 @@ class LoadVideoByUrl:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE",)
-    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME",)
+    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE", "INT", "INT",)
+    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME", "WIDTH", "HEIGHT",)
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
@@ -177,7 +185,7 @@ class LoadVideoByUrl:
 
     def load_video(self, url, max_frames, fps, max_width, max_height):
         if not url or not url.strip():
-            return (None, None, None, None)
+            return (None, None, None, None, None, None)
         
         response = requests.get(url, stream=True)
         response.raise_for_status()
@@ -247,7 +255,8 @@ class LoadVideoByUrl:
         video_tensor = torch.cat(frames, dim=0)  # (frames, H, W, 3)
         first_frame = frames[0]
         last_frame = frames[-1]
-        return video_tensor, float(fps), first_frame, last_frame
+        height, width = video_tensor.shape[1], video_tensor.shape[2]
+        return video_tensor, float(fps), first_frame, last_frame, width, height
 
     @classmethod
     def IS_CHANGED(cls, url, max_frames, fps, max_width, max_height):
