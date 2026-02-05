@@ -65,6 +65,55 @@ class LoadImageByUrl:
         return url
 
 
+# 🖼️ LoadImagesByUrl
+class LoadImagesByUrl:
+    """
+    Loads multiple images from remote URLs and returns them as separate Torch tensors.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "https://example.com/media.png", "multiline": False}),
+                "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "url2": ("STRING", {"default": "", "multiline": False}),
+                "url3": ("STRING", {"default": "", "multiline": False}),
+                "url4": ("STRING", {"default": "", "multiline": False}),
+                "url5": ("STRING", {"default": "", "multiline": False}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "IMAGE", "IMAGE",)
+    RETURN_NAMES = ("image1", "image2", "image3", "image4", "image5",)
+    FUNCTION = "load_images"
+    CATEGORY = "Remhes/Remote"
+
+    def load_images(self, url, max_width, max_height, url2, url3, url4, url5):
+        image_loader = LoadImageByUrl()
+        images = []
+        
+        # Load all URLs
+        for img_url in [url, url2, url3, url4, url5]:
+            if img_url and img_url.strip():
+                try:
+                    img_tensor = image_loader.load_image(img_url, max_width, max_height)[0]
+                    images.append(img_tensor)
+                except Exception as e:
+                    # If loading fails, return None
+                    images.append(None)
+            else:
+                # Empty URL - return None
+                images.append(None)
+        
+        return tuple(images)
+
+    @classmethod
+    def IS_CHANGED(cls, url, max_width, max_height, url2, url3, url4, url5):
+        return f"{url}|{url2}|{url3}|{url4}|{url5}"
+
+
 # 🎥 LoadVideoByUrl
 class LoadVideoByUrl:
     """
@@ -279,15 +328,17 @@ class LoadByUrl:
         return f"{url}|{url1}|{url2}|{url3}|{url4}|{url5}"
 
 
-# --- Register both nodes with ComfyUI ---
+# --- Register nodes with ComfyUI ---
 NODE_CLASS_MAPPINGS = {
     "LoadImageByUrl": LoadImageByUrl,
+    "LoadImagesByUrl": LoadImagesByUrl,
     "LoadVideoByUrl": LoadVideoByUrl,
     "LoadByUrl": LoadByUrl,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImageByUrl": "🖼️ Load Image by URL",
+    "LoadImagesByUrl": "🖼️ Load Images by URL",
     "LoadVideoByUrl": "🎥 Load Video by URL",
     "LoadByUrl": "🌐 Load by URL (Auto-detect)",
 }
