@@ -126,7 +126,7 @@ class LoadVideoByUrl:
             "required": {
                 "url": ("STRING", {"default": "https://example.com/video.mp4", "multiline": False}),
                 "max_frames": ("INT", {"default": 32, "min": 0, "max": 10000, "step": 1}),
-                "frame_skip": ("INT", {"default": 0, "min": 0, "max": 100, "step": 1}),
+                "fps": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 120.0, "step": 0.1}),
                 "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
             },
@@ -169,34 +169,44 @@ class LoadVideoByUrl:
         del pil_img
         return resized
 
-    def load_video(self, url, max_frames, frame_skip, max_width, max_height):
+    def load_video(self, url, max_frames, fps, max_width, max_height):
         response = requests.get(url, stream=True)
         response.raise_for_status()
         buffer = BytesIO(response.content)
 
         container = av.open(buffer)
         video_stream = next(s for s in container.streams if s.type == "video")
-        fps = float(video_stream.average_rate or 25)
+        video_fps = float(video_stream.average_rate or 25)
         frames = []
         last_frame_data = None
 
+        # Calculate frame interval based on fps
+        # If fps is 0 or >= video fps, include all frames
+        if fps <= 0 or fps >= video_fps:
+            frame_interval = 1.0
+        else:
+            frame_interval = video_fps / fps
+
         frame_count = 0
+        next_frame_index = 0.0
+        
         for i, frame in enumerate(container.decode(video_stream)):
-            is_first = i == 0
-            should_include = is_first or (frame_skip == 0) or (i % (frame_skip + 1) == 0)
-            
             img = frame.to_ndarray(format="rgb24")
             
             # Store as last_frame_data (will be added at end if not already included)
             last_frame_data = (img, i)
             
-            # Skip middle frames based on frame_skip logic
+            # Determine if this frame should be included based on fps logic
+            should_include = i >= int(next_frame_index)
+            
             if not should_include:
                 continue
                 
             if max_frames > 0 and frame_count >= max_frames:
                 break
+            
             frame_count += 1
+            next_frame_index += frame_interval
 
             img = self._resize_frame(img, max_width, max_height)
             tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
@@ -207,11 +217,15 @@ class LoadVideoByUrl:
 
         container.close()
         
-        # Add last frame if it wasn't already included
+        # Add last frame if it wasn't already included and we have frames
         if last_frame_data and len(frames) > 0:
             last_img, last_idx = last_frame_data
-            last_processed_idx = last_idx if should_include else -1
-            if frame_skip > 0 and last_processed_idx != last_idx:
+            # Check if the last frame was already processed
+            if last_idx >= int(next_frame_index - frame_interval):
+                # Last frame was already included, skip
+                pass
+            else:
+                # Add the last frame
                 img = self._resize_frame(last_img, max_width, max_height)
                 tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
                 frames.append(tensor)
@@ -224,10 +238,10 @@ class LoadVideoByUrl:
         video_tensor = torch.cat(frames, dim=0)  # (frames, H, W, 3)
         first_frame = frames[0]
         last_frame = frames[-1]
-        return video_tensor, fps, first_frame, last_frame
+        return video_tensor, float(fps), first_frame, last_frame
 
     @classmethod
-    def IS_CHANGED(cls, url, max_frames, frame_skip, max_width, max_height):
+    def IS_CHANGED(cls, url, max_frames, fps, max_width, max_height):
         return url
 
 
