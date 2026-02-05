@@ -28,6 +28,9 @@ class LoadImageByUrl:
     OUTPUT_NODE = True
 
     def load_image(self, url, max_width=0, max_height=0):
+        if not url or not url.strip():
+            return (None,)
+        
         response = requests.get(url, stream=True)
         response.raise_for_status()
 
@@ -173,6 +176,9 @@ class LoadVideoByUrl:
         return resized
 
     def load_video(self, url, max_frames, fps, max_width, max_height):
+        if not url or not url.strip():
+            return (None, None, None, None)
+        
         response = requests.get(url, stream=True)
         response.raise_for_status()
         buffer = BytesIO(response.content)
