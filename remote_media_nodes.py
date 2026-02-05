@@ -25,6 +25,7 @@ class LoadImageByUrl:
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "load_image"
     CATEGORY = "Remhes/Remote"
+    OUTPUT_NODE = True
 
     def load_image(self, url, max_width=0, max_height=0):
         response = requests.get(url, stream=True)
@@ -89,6 +90,7 @@ class LoadImagesByUrl:
     RETURN_NAMES = ("image1", "image2", "image3", "image4", "image5",)
     FUNCTION = "load_images"
     CATEGORY = "Remhes/Remote"
+    OUTPUT_NODE = True
 
     def load_images(self, url, max_width, max_height, url2, url3, url4, url5):
         image_loader = LoadImageByUrl()
@@ -136,6 +138,7 @@ class LoadVideoByUrl:
     RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME",)
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
+    OUTPUT_NODE = True
 
     def _resize_frame(self, img, max_width, max_height):
         """Helper method to resize a frame based on max_width and max_height"""
