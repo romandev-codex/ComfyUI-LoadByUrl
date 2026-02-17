@@ -138,15 +138,17 @@ class LoadVideoByUrl:
         return {
             "required": {
                 "url": ("STRING", {"default": "https://example.com/video.mp4", "multiline": False}),
-                "max_frames": ("INT", {"default": 32, "min": 0, "max": 10000, "step": 1}),
+                "max_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1}),
+                "select_every_nth": ("INT", {"default": 1, "min": 1, "max": 1000, "step": 1}),
                 "fps": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 120.0, "step": 0.1}),
+                "skip_first_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1}),
                 "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE", "INT", "INT",)
-    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME", "WIDTH", "HEIGHT",)
+    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE", "INT", "INT", "AUDIO",)
+    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME", "WIDTH", "HEIGHT", "AUDIO",)
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
@@ -183,9 +185,9 @@ class LoadVideoByUrl:
         del pil_img
         return resized
 
-    def load_video(self, url, max_frames, fps, max_width, max_height):
+    def load_video(self, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height):
         if not url or not url.strip():
-            return (None, None, None, None, None, None)
+            return (None, None, None, None, None, None, None)
         
         response = requests.get(url, stream=True)
         response.raise_for_status()
@@ -196,6 +198,16 @@ class LoadVideoByUrl:
         video_fps = float(video_stream.average_rate or 25)
         frames = []
         last_frame_data = None
+        
+        # Find audio stream
+        audio_stream = None
+        audio_frames = []
+        sample_rate = 0
+        for stream in container.streams:
+            if stream.type == "audio":
+                audio_stream = stream
+                sample_rate = stream.sample_rate
+                break
 
         # Calculate frame interval based on fps
         # If fps is 0 or >= video fps, include all frames
@@ -204,24 +216,42 @@ class LoadVideoByUrl:
         else:
             frame_interval = video_fps / fps
 
+        skip_first_frames = int(video_fps * max(skip_first_seconds, 0.0))
+        max_allowed_frames = int(video_fps * max(max_seconds, 0.0)) if max_seconds > 0 else 0
+
         frame_count = 0
         next_frame_index = 0.0
         
+        # Decode audio if available
+        if audio_stream:
+            container.seek(0)
+            for frame in container.decode(audio_stream):
+                audio_frames.append(frame.to_ndarray())
+            container.seek(0)
+        
         for i, frame in enumerate(container.decode(video_stream)):
             img = frame.to_ndarray(format="rgb24")
+
+            if i < skip_first_frames:
+                continue
+
+            # Stop decoding past the requested time window (relative to skip_first_seconds)
+            if max_allowed_frames > 0 and (i - skip_first_frames) >= max_allowed_frames:
+                break
             
             # Store as last_frame_data (will be added at end if not already included)
             last_frame_data = (img, i)
             
+            # Keep one frame every N frames (1 = keep all frames)
+            if select_every_nth > 1 and (i % select_every_nth) != 0:
+                continue
+
             # Determine if this frame should be included based on fps logic
             should_include = i >= int(next_frame_index)
             
             if not should_include:
                 continue
                 
-            if max_frames > 0 and frame_count >= max_frames:
-                break
-            
             frame_count += 1
             next_frame_index += frame_interval
 
@@ -256,10 +286,60 @@ class LoadVideoByUrl:
         first_frame = frames[0]
         last_frame = frames[-1]
         height, width = video_tensor.shape[1], video_tensor.shape[2]
-        return video_tensor, float(fps), first_frame, last_frame, width, height
+        
+        # Process audio to ComfyUI AUDIO format: {"waveform": (B, C, S), "sample_rate": int}
+        audio_output = None
+        if audio_frames:
+            normalized_frames = []
+            for frame_np in audio_frames:
+                if frame_np.ndim == 1:
+                    frame_np = frame_np[np.newaxis, :]
+                elif frame_np.ndim == 2:
+                    if frame_np.shape[1] <= 8 and frame_np.shape[0] > frame_np.shape[1]:
+                        frame_np = frame_np.T
+                else:
+                    continue
+
+                if np.issubdtype(frame_np.dtype, np.integer):
+                    max_val = float(np.iinfo(frame_np.dtype).max)
+                    if max_val > 0:
+                        frame_np = frame_np.astype(np.float32) / max_val
+                    else:
+                        frame_np = frame_np.astype(np.float32)
+                else:
+                    frame_np = frame_np.astype(np.float32)
+
+                normalized_frames.append(frame_np)
+
+            if normalized_frames:
+                audio_np = np.concatenate(normalized_frames, axis=1)
+                skip_audio_samples = int((sample_rate or 44100) * max(skip_first_seconds, 0.0))
+                if skip_audio_samples > 0:
+                    if skip_audio_samples >= audio_np.shape[1]:
+                        audio_np = None
+                    else:
+                        audio_np = audio_np[:, skip_audio_samples:]
+
+                if audio_np is not None and max_seconds > 0:
+                    max_audio_samples = int((sample_rate or 44100) * max(max_seconds, 0.0))
+                    if max_audio_samples <= 0:
+                        audio_np = None
+                    elif audio_np.shape[1] > max_audio_samples:
+                        audio_np = audio_np[:, :max_audio_samples]
+
+                if audio_np is None or audio_np.shape[1] == 0:
+                    audio_output = None
+                else:
+                    audio_waveform = torch.from_numpy(audio_np).unsqueeze(0)
+                    audio_output = {
+                        "waveform": audio_waveform,
+                        "sample_rate": int(sample_rate or 44100),
+                    }
+        
+        return video_tensor, float(video_fps), first_frame, last_frame, width, height, audio_output
 
     @classmethod
-    def IS_CHANGED(cls, url, max_frames, fps, max_width, max_height):
+    def IS_CHANGED(cls, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height):
         return url
 
 
