@@ -147,8 +147,8 @@ class LoadVideoByUrl:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE", "INT", "INT", "AUDIO",)
-    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME", "WIDTH", "HEIGHT", "AUDIO",)
+    RETURN_TYPES = ("IMAGE", "FLOAT", "IMAGE", "IMAGE", "INT", "INT", "INT", "AUDIO",)
+    RETURN_NAMES = ("IMAGES", "FPS", "FIRST_FRAME", "LAST_FRAME", "WIDTH", "HEIGHT", "FRAMES", "AUDIO",)
     FUNCTION = "load_video"
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
@@ -187,7 +187,7 @@ class LoadVideoByUrl:
 
     def load_video(self, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height):
         if not url or not url.strip():
-            return (None, None, None, None, None, None, None)
+            return (None, None, None, None, None, None, 0, None)
         
         response = requests.get(url, stream=True)
         response.raise_for_status()
@@ -336,7 +336,8 @@ class LoadVideoByUrl:
                         "sample_rate": int(sample_rate or 44100),
                     }
         
-        return video_tensor, float(video_fps), first_frame, last_frame, width, height, audio_output
+        frames_count = int(video_tensor.shape[0])
+        return video_tensor, float(video_fps), first_frame, last_frame, width, height, frames_count, audio_output
 
     @classmethod
     def IS_CHANGED(cls, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height):
