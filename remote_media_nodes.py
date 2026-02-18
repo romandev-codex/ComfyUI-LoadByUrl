@@ -344,15 +344,107 @@ class LoadVideoByUrl:
         return url
 
 
+# 🧩 LastFrameFromFrames
+class LastFrameFromFrames:
+    """
+    Returns the last frame from an IMAGE batch.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "frames": ("IMAGE",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("LAST_FRAME",)
+    FUNCTION = "get_last_frame"
+    CATEGORY = "Remhes/Remote"
+    OUTPUT_NODE = True
+
+    def get_last_frame(self, frames):
+        if frames is None:
+            raise ValueError("No frames input provided.")
+
+        if isinstance(frames, torch.Tensor):
+            if frames.ndim == 4:
+                if frames.shape[0] == 0:
+                    raise ValueError("Frames input is empty.")
+                return (frames[-1:].contiguous(),)
+            if frames.ndim == 3:
+                return (frames.unsqueeze(0).contiguous(),)
+
+        raise ValueError("Invalid frames input. Expected IMAGE tensor with shape (N,H,W,C) or (H,W,C).")
+
+
+# 🧩 FixFrames
+class FixFrames:
+    """
+    Ensures an IMAGE batch has exactly fix_frames frames.
+    If input has more frames, drops frames from the end.
+    If input has fewer frames, clones the last frame.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "frames": ("IMAGE",),
+                "fix_frames": ("INT", {"default": 1, "min": 1, "max": 100000, "step": 1}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("FRAMES",)
+    FUNCTION = "fix_frames_count"
+    CATEGORY = "Remhes/Remote"
+    OUTPUT_NODE = True
+
+    def fix_frames_count(self, frames, fix_frames):
+        if frames is None:
+            raise ValueError("No frames input provided.")
+
+        if not isinstance(frames, torch.Tensor):
+            raise ValueError("Invalid frames input. Expected IMAGE tensor.")
+
+        if frames.ndim == 3:
+            frames = frames.unsqueeze(0)
+        elif frames.ndim != 4:
+            raise ValueError("Invalid frames input. Expected IMAGE tensor with shape (N,H,W,C) or (H,W,C).")
+
+        current_count = int(frames.shape[0])
+        target_count = int(fix_frames)
+
+        if current_count == 0:
+            raise ValueError("Frames input is empty.")
+
+        if current_count > target_count:
+            return (frames[:target_count].contiguous(),)
+
+        if current_count < target_count:
+            pad_count = target_count - current_count
+            last_frame = frames[-1:].clone().contiguous()
+            padded = torch.cat([frames, last_frame.repeat(pad_count, 1, 1, 1)], dim=0)
+            return (padded.contiguous(),)
+
+        return (frames.contiguous(),)
+
+
 # --- Register nodes with ComfyUI ---
 NODE_CLASS_MAPPINGS = {
     "LoadImageByUrl": LoadImageByUrl,
     "LoadImagesByUrl": LoadImagesByUrl,
     "LoadVideoByUrl": LoadVideoByUrl,
+    "LastFrameFromFrames": LastFrameFromFrames,
+    "FixFrames": FixFrames,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImageByUrl": "🖼️ Load Image by URL",
     "LoadImagesByUrl": "🖼️ Load Images by URL",
     "LoadVideoByUrl": "🎥 Load Video by URL",
+    "LastFrameFromFrames": "🧩 Last Frame from Frames",
+    "FixFrames": "🧩 Fix Frames",
 }
