@@ -6,6 +6,44 @@ import numpy as np
 import av
 
 
+def _crop_pil_to_divisible(image, divisible_by):
+    if divisible_by <= 1:
+        return image
+
+    width, height = image.size
+    new_width = (width // divisible_by) * divisible_by
+    new_height = (height // divisible_by) * divisible_by
+
+    if new_width == 0 or new_height == 0:
+        return image
+
+    if new_width == width and new_height == height:
+        return image
+
+    left = (width - new_width) // 2
+    top = (height - new_height) // 2
+    return image.crop((left, top, left + new_width, top + new_height))
+
+
+def _crop_array_to_divisible(img, divisible_by):
+    if divisible_by <= 1:
+        return img
+
+    height, width = img.shape[:2]
+    new_width = (width // divisible_by) * divisible_by
+    new_height = (height // divisible_by) * divisible_by
+
+    if new_width == 0 or new_height == 0:
+        return img
+
+    if new_width == width and new_height == height:
+        return img
+
+    left = (width - new_width) // 2
+    top = (height - new_height) // 2
+    return img[top:top + new_height, left:left + new_width]
+
+
 # 🖼️ LoadImageByUrl
 class LoadImageByUrl:
     """
@@ -19,6 +57,7 @@ class LoadImageByUrl:
                 "url": ("STRING", {"default": "https://example.com/image.png", "multiline": False}),
                 "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "divisible_by": ("INT", {"default": 16, "min": 1, "max": 10000, "step": 1}),
             },
         }
 
@@ -28,7 +67,7 @@ class LoadImageByUrl:
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
 
-    def load_image(self, url, max_width=0, max_height=0):
+    def load_image(self, url, max_width=0, max_height=0, divisible_by=16):
         if not url or not url.strip():
             return (None, None, None)
         
@@ -59,6 +98,8 @@ class LoadImageByUrl:
         # Resize if needed
         if new_width != current_width or new_height != current_height:
             image = image.resize((new_width, new_height), Image.LANCZOS)
+
+        image = _crop_pil_to_divisible(image, divisible_by)
         
         arr = np.array(image, dtype=np.float32) / 255.0
         tensor = torch.from_numpy(arr).unsqueeze(0)  # (1, H, W, 3)
@@ -67,7 +108,7 @@ class LoadImageByUrl:
         return (tensor, width, height)
 
     @classmethod
-    def IS_CHANGED(cls, url, max_width, max_height):
+    def IS_CHANGED(cls, url, max_width, max_height, divisible_by):
         return url
 
 
@@ -84,6 +125,7 @@ class LoadImagesByUrl:
                 "url": ("STRING", {"default": "https://example.com/media.png", "multiline": False}),
                 "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "divisible_by": ("INT", {"default": 16, "min": 1, "max": 10000, "step": 1}),
                 "url2": ("STRING", {"default": "", "multiline": False}),
                 "url3": ("STRING", {"default": "", "multiline": False}),
                 "url4": ("STRING", {"default": "", "multiline": False}),
@@ -97,7 +139,7 @@ class LoadImagesByUrl:
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
 
-    def load_images(self, url, max_width, max_height, url2, url3, url4, url5):
+    def load_images(self, url, max_width, max_height, divisible_by, url2, url3, url4, url5):
         image_loader = LoadImageByUrl()
         images = []
         first_width = None
@@ -107,7 +149,7 @@ class LoadImagesByUrl:
         for idx, img_url in enumerate([url, url2, url3, url4, url5]):
             if img_url and img_url.strip():
                 try:
-                    img_tensor, width, height = image_loader.load_image(img_url, max_width, max_height)
+                    img_tensor, width, height = image_loader.load_image(img_url, max_width, max_height, divisible_by)
                     images.append(img_tensor)
                     # Store dimensions only for first image
                     if idx == 0:
@@ -123,7 +165,7 @@ class LoadImagesByUrl:
         return tuple(images + [first_width, first_height])
 
     @classmethod
-    def IS_CHANGED(cls, url, max_width, max_height, url2, url3, url4, url5):
+    def IS_CHANGED(cls, url, max_width, max_height, divisible_by, url2, url3, url4, url5):
         return f"{url}|{url2}|{url3}|{url4}|{url5}"
 
 
@@ -144,6 +186,7 @@ class LoadVideoByUrl:
                 "skip_first_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1}),
                 "max_width": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
                 "max_height": ("INT", {"default": 0, "min": 0, "max": 10000, "step": 1}),
+                "divisible_by": ("INT", {"default": 16, "min": 1, "max": 10000, "step": 1}),
             },
         }
 
@@ -153,7 +196,7 @@ class LoadVideoByUrl:
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
 
-    def _resize_frame(self, img, max_width, max_height):
+    def _resize_frame(self, img, max_width, max_height, divisible_by):
         """Helper method to resize a frame based on max_width and max_height"""
         from PIL import Image
         pil_img = Image.fromarray(img)
@@ -178,14 +221,15 @@ class LoadVideoByUrl:
         
         # No resizing needed
         if new_width == current_width and new_height == current_height:
-            return img
-        
-        pil_img = pil_img.resize((new_width, new_height), Image.LANCZOS)
-        resized = np.array(pil_img)
-        del pil_img
-        return resized
+            resized = img
+        else:
+            pil_img = pil_img.resize((new_width, new_height), Image.LANCZOS)
+            resized = np.array(pil_img)
 
-    def load_video(self, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height):
+        del pil_img
+        return _crop_array_to_divisible(resized, divisible_by)
+
+    def load_video(self, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height, divisible_by):
         if not url or not url.strip():
             return (None, None, None, None, None, None, 0, None)
         
@@ -255,7 +299,7 @@ class LoadVideoByUrl:
             frame_count += 1
             next_frame_index += frame_interval
 
-            img = self._resize_frame(img, max_width, max_height)
+            img = self._resize_frame(img, max_width, max_height, divisible_by)
             tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
             frames.append(tensor)
 
@@ -273,7 +317,7 @@ class LoadVideoByUrl:
                 pass
             else:
                 # Add the last frame
-                img = self._resize_frame(last_img, max_width, max_height)
+                img = self._resize_frame(last_img, max_width, max_height, divisible_by)
                 tensor = torch.from_numpy(img.astype(np.float32) / 255.0).unsqueeze(0)
                 frames.append(tensor)
                 del img
@@ -340,7 +384,7 @@ class LoadVideoByUrl:
         return video_tensor, float(video_fps), first_frame, last_frame, width, height, frames_count, audio_output
 
     @classmethod
-    def IS_CHANGED(cls, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height):
+    def IS_CHANGED(cls, url, max_seconds, select_every_nth, fps, skip_first_seconds, max_width, max_height, divisible_by):
         return url
 
 
