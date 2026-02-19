@@ -344,6 +344,106 @@ class LoadVideoByUrl:
         return url
 
 
+# 🔊 LoadAudioByUrl
+class LoadAudioByUrl:
+    """
+    Loads audio from a remote URL and returns it as ComfyUI AUDIO.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "url": ("STRING", {"default": "https://example.com/audio.mp3", "multiline": False}),
+                "max_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1}),
+                "skip_first_seconds": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 3600.0, "step": 0.1}),
+            },
+        }
+
+    RETURN_TYPES = ("AUDIO", "INT", "INT",)
+    RETURN_NAMES = ("AUDIO", "SAMPLE_RATE", "SAMPLES",)
+    FUNCTION = "load_audio"
+    CATEGORY = "Remhes/Remote"
+    OUTPUT_NODE = True
+
+    def load_audio(self, url, max_seconds, skip_first_seconds):
+        if not url or not url.strip():
+            return (None, 0, 0)
+
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+
+        audio_frames = []
+        sample_rate = 0
+        channels = 1
+
+        with av.open(BytesIO(response.content)) as container:
+            audio_stream = next((s for s in container.streams if s.type == "audio"), None)
+            if audio_stream is None:
+                raise ValueError("No audio stream found in media.")
+
+            sample_rate = int(audio_stream.sample_rate or 44100)
+            channels = int(audio_stream.channels or 1)
+
+            for frame in container.decode(audio_stream):
+                frame_np = frame.to_ndarray()
+
+                if frame_np.ndim == 1:
+                    frame_np = frame_np[np.newaxis, :]
+                elif frame_np.ndim == 2:
+                    if frame_np.shape[0] != channels and frame_np.shape[1] == channels:
+                        frame_np = frame_np.T
+                    elif frame_np.shape[0] != channels:
+                        frame_np = frame_np.reshape(-1, channels).T
+                else:
+                    continue
+
+                if np.issubdtype(frame_np.dtype, np.integer):
+                    info = np.iinfo(frame_np.dtype)
+                    scale = max(abs(float(info.min)), abs(float(info.max)))
+                    if scale > 0:
+                        frame_np = frame_np.astype(np.float32) / scale
+                    else:
+                        frame_np = frame_np.astype(np.float32)
+                else:
+                    frame_np = frame_np.astype(np.float32)
+
+                audio_frames.append(frame_np)
+
+        if not audio_frames:
+            raise ValueError("Decoded zero audio frames.")
+
+        audio_np = np.concatenate(audio_frames, axis=1)
+
+        skip_samples = int(sample_rate * max(skip_first_seconds, 0.0))
+        if skip_samples > 0:
+            if skip_samples >= audio_np.shape[1]:
+                raise ValueError("skip_first_seconds exceeds audio duration.")
+            audio_np = audio_np[:, skip_samples:]
+
+        if max_seconds > 0:
+            max_samples = int(sample_rate * max(max_seconds, 0.0))
+            if max_samples <= 0:
+                raise ValueError("max_seconds produced an invalid sample count.")
+            if audio_np.shape[1] > max_samples:
+                audio_np = audio_np[:, :max_samples]
+
+        if audio_np.shape[1] == 0:
+            raise ValueError("No audio data after trimming.")
+
+        waveform = torch.from_numpy(audio_np).unsqueeze(0).contiguous()  # (1, C, S)
+        audio_output = {
+            "waveform": waveform,
+            "sample_rate": sample_rate,
+        }
+
+        return (audio_output, int(sample_rate), int(audio_np.shape[1]))
+
+    @classmethod
+    def IS_CHANGED(cls, url, max_seconds, skip_first_seconds):
+        return url
+
+
 # 🧩 LastFrameFromFrames
 class LastFrameFromFrames:
     """
@@ -437,6 +537,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadImageByUrl": LoadImageByUrl,
     "LoadImagesByUrl": LoadImagesByUrl,
     "LoadVideoByUrl": LoadVideoByUrl,
+    "LoadAudioByUrl": LoadAudioByUrl,
     "LastFrameFromFrames": LastFrameFromFrames,
     "FixFrames": FixFrames,
 }
@@ -445,6 +546,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImageByUrl": "🖼️ Load Image by URL",
     "LoadImagesByUrl": "🖼️ Load Images by URL",
     "LoadVideoByUrl": "🎥 Load Video by URL",
+    "LoadAudioByUrl": "🔊 Load Audio by URL",
     "LastFrameFromFrames": "🧩 Last Frame from Frames",
     "FixFrames": "🧩 Fix Frames",
 }
