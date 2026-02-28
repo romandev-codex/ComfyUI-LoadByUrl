@@ -196,6 +196,27 @@ class LoadVideoByUrl:
     CATEGORY = "Remhes/Remote"
     OUTPUT_NODE = True
 
+    def _first_stream_of_type(self, container, stream_type):
+        for stream in container.streams:
+            if stream.type == stream_type:
+                return stream
+        return None
+
+    def _decode_audio_from_bytes(self, media_bytes):
+        audio_frames = []
+        sample_rate = 0
+
+        with av.open(BytesIO(media_bytes)) as audio_container:
+            audio_stream = self._first_stream_of_type(audio_container, "audio")
+            if audio_stream is None:
+                return audio_frames, sample_rate
+
+            sample_rate = int(audio_stream.sample_rate or 44100)
+            for frame in audio_container.decode(audio_stream):
+                audio_frames.append(frame.to_ndarray())
+
+        return audio_frames, sample_rate
+
     def _build_audio_output(self, audio_frames, sample_rate, skip_first_seconds, max_seconds):
         audio_output = None
         if audio_frames:
@@ -284,20 +305,21 @@ class LoadVideoByUrl:
         
         response = requests.get(url, stream=True)
         response.raise_for_status()
-        buffer = BytesIO(response.content)
+        media_bytes = response.content
+        buffer = BytesIO(media_bytes)
 
         container = av.open(buffer)
-        video_stream = next((s for s in container.streams if s.type == "video"), None)
-        audio_stream = next((s for s in container.streams if s.type == "audio"), None)
+        video_stream = self._first_stream_of_type(container, "video")
+        audio_stream = self._first_stream_of_type(container, "audio")
 
         if video_stream is None:
             if audio_stream is None:
                 container.close()
                 raise ValueError("No video or audio stream found in media.")
 
-            sample_rate = int(audio_stream.sample_rate or 44100)
-            audio_frames = [frame.to_ndarray() for frame in container.decode(audio_stream)]
             container.close()
+
+            audio_frames, sample_rate = self._decode_audio_from_bytes(media_bytes)
 
             audio_output = self._build_audio_output(audio_frames, sample_rate, skip_first_seconds, max_seconds)
             if audio_output is None:
@@ -310,7 +332,7 @@ class LoadVideoByUrl:
         last_frame_data = None
         
         audio_frames = []
-        sample_rate = int(audio_stream.sample_rate or 44100) if audio_stream else 0
+        sample_rate = 0
 
         # Calculate frame interval based on fps
         # If fps is 0 or >= video fps, include all frames
@@ -325,12 +347,9 @@ class LoadVideoByUrl:
         frame_count = 0
         next_frame_index = 0.0
         
-        # Decode audio if available
+        # Decode audio from a separate container to avoid seek/decode edge cases.
         if audio_stream:
-            container.seek(0)
-            for frame in container.decode(audio_stream):
-                audio_frames.append(frame.to_ndarray())
-            container.seek(0)
+            audio_frames, sample_rate = self._decode_audio_from_bytes(media_bytes)
         
         for i, frame in enumerate(container.decode(video_stream)):
             img = frame.to_ndarray(format="rgb24")
